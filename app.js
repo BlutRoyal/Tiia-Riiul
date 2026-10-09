@@ -23,6 +23,7 @@ const S = {
   period: "all",
   month: null,
   editing: null,
+  pinError: "",
   formPhoto: null,
 };
 
@@ -95,8 +96,16 @@ async function call(payload) {
     // text/plain = "lihtne" päring, Apps Script ei vaja siis CORS eelpäringut
     res = await fetch(CFG.API_URL, { method: "POST", body: JSON.stringify({ ...payload, key: lsGet(KEY) || "" }) });
   }
-  const data = await res.json();
-  if (data.error === "unauthorized") { lsDel(KEY); render(); throw new Error("Vale PIN"); }
+  let data;
+  try { data = await res.json(); }
+  catch { throw new Error("Skript ei vastanud. Kontrolli, et Web app on avaldatud valikuga Who has access: Anyone."); }
+  if (data.error === "unauthorized" || data.error === "pin_not_set") {
+    S.pinError = data.error === "pin_not_set"
+      ? "PIN on skriptis veel määramata (MUUDA-MIND). Muuda see Code.gs failis ja tee Deploy → Manage deployments → New version."
+      : "Vale PIN. Kui muutsid PIN-i skriptis, tee ka Deploy → Manage deployments → New version.";
+    lsDel(KEY); render();
+    throw new Error("PIN");
+  }
   if (data.error) throw new Error(data.error);
   return data;
 }
@@ -140,7 +149,7 @@ async function load() {
     render();
   } catch (e) {
     if (!S.loaded) { S.loaded = true; render(); }
-    if (lsGet(KEY) || DEMO) toast("Ei saanud andmeid laadida: " + e.message);
+    if (e.message !== "PIN") toast("Ei saanud andmeid laadida: " + e.message);
   }
 }
 
@@ -202,6 +211,7 @@ function pinView() {
     <img src="icons/apple-touch-icon.png" alt="">
     <h1 style="margin:0">Tiia Riiul</h1>
     <p class="muted" style="margin:0">Sisesta PIN, mille Freddy sulle andis.</p>
+    ${S.pinError ? `<p style="margin:0;color:var(--neg);font-size:14px">${esc(S.pinError)}</p>` : ""}
     <input class="input" id="pin" type="password" inputmode="numeric" autocomplete="off" required>
     <button class="btn primary block">Ava riiul</button>
   </form>`;
@@ -718,6 +728,7 @@ document.addEventListener("submit", (e) => {
   if (e.target.id !== "pin-form") return;
   e.preventDefault();
   lsSet(KEY, $("#pin").value.trim());
+  S.pinError = "";
   S.loaded = false;
   render();
   load();
