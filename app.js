@@ -23,6 +23,8 @@ const S = {
   period: "all",
   month: null,
   editing: null,
+  newId: null,
+  formPhotoKey: null,
   pinError: "",
   formPhoto: null,
 };
@@ -87,14 +89,44 @@ const KEY = "tr-key";
 const CACHE = "tr-cache";
 const DEMO_DB = "tr-demo";
 
-async function call(payload) {
+// Google Apps Script on vahel aeglane. Proovime mitu korda, enne kui veateate näitame.
+// Korduskatse on ohutu: tooted salvestatakse id järgi (üle kirjutades), pilt ja ülekanne kannavad oma võtit.
+const TRIES = 4;
+const TIMEOUT_MS = 45000;
+const WAIT_MS = [0, 2000, 5000, 10000];
+
+class FatalError extends Error {}
+
+async function call(payload, onRetry) {
   if (DEMO) return demoCall(payload);
+  let last;
+  for (let i = 0; i < TRIES; i++) {
+    if (WAIT_MS[i]) { onRetry && onRetry(i); await new Promise((r) => setTimeout(r, WAIT_MS[i])); }
+    try {
+      return await callOnce(payload);
+    } catch (e) {
+      if (e instanceof FatalError) throw e;
+      last = e;
+    }
+  }
+  throw last;
+}
+
+async function callOnce(payload) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
   let res;
-  if (payload.action === "list") {
-    res = await fetch(`${CFG.API_URL}?action=list&key=${encodeURIComponent(lsGet(KEY) || "")}`);
-  } else {
-    // text/plain = "lihtne" päring, Apps Script ei vaja siis CORS eelpäringut
-    res = await fetch(CFG.API_URL, { method: "POST", body: JSON.stringify({ ...payload, key: lsGet(KEY) || "" }) });
+  try {
+    if (payload.action === "list") {
+      res = await fetch(`${CFG.API_URL}?action=list&key=${encodeURIComponent(lsGet(KEY) || "")}`, { signal: ctrl.signal });
+    } else {
+      // text/plain = "lihtne" päring, Apps Script ei vaja siis CORS eelpäringut
+      res = await fetch(CFG.API_URL, { method: "POST", body: JSON.stringify({ ...payload, key: lsGet(KEY) || "" }), signal: ctrl.signal });
+    }
+  } catch (e) {
+    throw new Error(e.name === "AbortError" ? "Google ei vastanud õigel ajal" : "Ühendus katkes");
+  } finally {
+    clearTimeout(timer);
   }
   let data;
   try { data = await res.json(); }
@@ -104,11 +136,14 @@ async function call(payload) {
       ? "PIN on skriptis veel määramata. Kirjuta see Code.gs faili ülemisse ritta ja tee Deploy → Manage deployments → New version."
       : "Vale PIN. Kui muutsid PIN-i skriptis, tee ka Deploy → Manage deployments → New version.";
     lsDel(KEY); render();
-    throw new Error("PIN");
+    throw new FatalError("PIN");
   }
   if (data.error) throw new Error(data.error);
   return data;
 }
+
+// Näitab nupul, et proovime uuesti, et ootamine ei tunduks rippumisena.
+const retryOn = (btn) => (i) => { if (btn) btn.innerHTML = `<div class="spin"></div>Google on aeglane, proovin uuesti (${i + 1}/${TRIES})…`; };
 
 function demoCall(p) {
   const db = JSON.parse(lsGet(DEMO_DB) || '{"items":[],"transfers":[]}');
@@ -122,7 +157,7 @@ function demoCall(p) {
     return { item };
   }
   if (p.action === "transfer") {
-    const t = { date: p.date, amount: p.amount };
+    const t = { date: p.date, amount: p.amount, id: p.id };
     db.transfers.push(t);
     lsSet(DEMO_DB, JSON.stringify(db));
     return { transfer: t };
@@ -160,8 +195,8 @@ function normalize(it) {
   };
 }
 
-async function saveItem(item, photo) {
-  const d = await call({ action: "save", item, photo });
+async function saveItem(item, photo, btn) {
+  const d = await call({ action: "save", item, photo: photo ? photo.data : null, photoKey: photo ? photo.key : null }, retryOn(btn));
   const saved = normalize(d.item);
   const i = S.items.findIndex((x) => x.id === saved.id);
   if (i >= 0) S.items[i] = saved; else S.items.push(saved);
@@ -394,6 +429,7 @@ function mountForm() {
     if (!f) return;
     try {
       S.formPhoto = await shrink(f);
+      S.formPhotoKey = uid();
       $("#photo-box").innerHTML = `<img src="${S.formPhoto}" alt="">`;
     } catch { toast("Pilti ei õnnestunud lugeda"); }
     inp.value = "";
@@ -401,7 +437,7 @@ function mountForm() {
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     const btn = $("#save-btn");
-    const base = S.editing || { id: uid(), created: new Date().toISOString(), status: "active" };
+    const base = S.editing || { id: S.newId || (S.newId = uid()), created: new Date().toISOString(), status: "active" };
     const item = {
       ...base,
       buyPlace: pickerValue(form, "buyPlace"),
@@ -418,10 +454,10 @@ function mountForm() {
     btn.disabled = true;
     btn.innerHTML = `<div class="spin"></div>Salvestan…`;
     try {
-      await saveItem(item, S.formPhoto);
+      await saveItem(item, S.formPhoto ? { data: S.formPhoto, key: S.formPhotoKey } : null, btn);
       toast(S.editing ? "Muudetud" : "Riiulil! 🧺");
       const back = S.editing && S.editing.status === "sold" ? "archive" : "active";
-      S.editing = null; S.formPhoto = null;
+      S.editing = null; S.formPhoto = null; S.newId = null;
       go(back);
     } catch (err) {
       toast("Salvestamine ebaõnnestus: " + err.message);
@@ -493,7 +529,7 @@ function sellSheet(it) {
           sellPlace: pickerValue(f, "sellPlace"), sellPrice: num(f.sellPrice.value),
           sellInclPostage: f.incl.checked, sellPostage: f.incl.checked ? num(f.sellPostage.value) : "",
           sellDate: f.sellDate.value || today(),
-        });
+        }, null, btn);
         closeSheet();
         const p = profit(S.items.find((x) => x.id === it.id));
         toast(`Arhiivis. Kasum ${eur(p, true)}`);
@@ -525,7 +561,7 @@ function priceSheet(it) {
       const btn = $("#price-btn", sh);
       btn.disabled = true; btn.innerHTML = `<div class="spin"></div>Salvestan…`;
       try {
-        await saveItem({ ...strip(it), listPrice: numOrEmpty(f.lp.value) });
+        await saveItem({ ...strip(it), listPrice: numOrEmpty(f.lp.value) }, null, btn);
         closeSheet();
         toast("Hind salvestatud");
         render();
@@ -536,6 +572,7 @@ function priceSheet(it) {
 
 function transferSheet() {
   const u = untransferred();
+  const trId = uid();
   openSheet(`<h2>Kandsid raha üle?</h2><p class="lead">Ülekandmata kasum on ${eur(u)}. Muuda summat, kui kandsid üle vähem.</p>
     <form class="form" id="tr-form">
       <div class="field"><label for="amount">Summa</label><div class="money"><input class="input" id="amount" name="amount" inputmode="decimal" value="${String(Math.max(0, u)).replace(".", ",")}" required></div></div>
@@ -547,13 +584,13 @@ function transferSheet() {
       if (amount <= 0) return toast("Sisesta summa");
       const btn = $("#tr-btn", sh); btn.disabled = true;
       try {
-        const d = await call({ action: "transfer", amount, date: today() });
-        S.transfers.push(d.transfer);
+        const d = await call({ action: "transfer", amount, date: today(), id: trId }, retryOn(btn));
+        if (!S.transfers.some((t) => t.id && t.id === d.transfer.id)) S.transfers.push(d.transfer);
         saveCache();
         closeSheet();
         toast("Tubli! Raha on kõrval 🐷");
         render();
-      } catch (err) { toast("Ei õnnestunud: " + err.message); btn.disabled = false; }
+      } catch (err) { toast("Ei õnnestunud: " + err.message); btn.disabled = false; btn.textContent = "Proovi uuesti"; }
     });
   });
 }
@@ -691,7 +728,7 @@ function moreView() {
 /* ---------- sündmused ---------- */
 
 function go(tab) {
-  if (tab !== "form" && S.tab === "form") { S.editing = null; S.formPhoto = null; }
+  if (tab !== "form" && S.tab === "form") { S.editing = null; S.formPhoto = null; S.newId = null; }
   S.tab = tab;
   closeSheet();
   render();
@@ -703,7 +740,7 @@ document.addEventListener("click", async (e) => {
 
   const tabBtn = t.closest("[data-tab]");
   if (tabBtn) {
-    if (tabBtn.dataset.tab === "form") { S.editing = null; S.formPhoto = null; }
+    if (tabBtn.dataset.tab === "form") { S.editing = null; S.formPhoto = null; S.newId = null; }
     return go(tabBtn.dataset.tab);
   }
 

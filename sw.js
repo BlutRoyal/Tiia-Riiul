@@ -1,5 +1,5 @@
 // Võrk enne, vahemälu varuks: uuendused jõuavad kohe kohale, aga äpp avaneb ka ilma netita.
-const CACHE = "tiia-riiul-v3";
+const CACHE = "tiia-riiul-v4";
 const SHELL = ["./", "index.html", "styles.css", "app.js", "config.js", "manifest.webmanifest",
   "icons/apple-touch-icon.png", "icons/icon-192.png", "icons/icon-512.png"];
 
