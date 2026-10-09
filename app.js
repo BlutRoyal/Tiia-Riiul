@@ -101,7 +101,7 @@ async function call(payload) {
   catch { throw new Error("Skript ei vastanud. Kontrolli, et Web app on avaldatud valikuga Who has access: Anyone."); }
   if (data.error === "unauthorized" || data.error === "pin_not_set") {
     S.pinError = data.error === "pin_not_set"
-      ? "PIN on skriptis veel määramata (MUUDA-MIND). Muuda see Code.gs failis ja tee Deploy → Manage deployments → New version."
+      ? "PIN on skriptis veel määramata. Kirjuta see Code.gs faili ülemisse ritta ja tee Deploy → Manage deployments → New version."
       : "Vale PIN. Kui muutsid PIN-i skriptis, tee ka Deploy → Manage deployments → New version.";
     lsDel(KEY); render();
     throw new Error("PIN");
@@ -278,9 +278,10 @@ function cardHTML(it) {
   const img = src
     ? `<img class="ph" src="${esc(src)}" alt="${esc(title(it))}" loading="lazy" onerror="this.onerror=null;this.src='https://lh3.googleusercontent.com/d/${esc(it.photoId)}=w1200'">`
     : `<div class="ph noph">${ICON.hanger}</div>`;
+  const hasList = String(it.listPrice ?? "").trim() !== "";
   const tag = sold
     ? `<span class="${p >= 0 ? "pos" : "neg"}">${eur(p, true)}</span>`
-    : `<span>${eur(cost(it))}</span>${it.size ? `<span>${esc(it.size)}</span>` : ""}`;
+    : `${hasList ? `<span class="pos">müügis ${eur(num(it.listPrice))}</span>` : `<span>${eur(cost(it))}</span>`}${it.size ? `<span>${esc(it.size)}</span>` : ""}`;
   const rows = [
     ["Ostetud", [it.buyPlace, fmtDate(it.buyDate)].filter(Boolean).join(", ")],
     ["Ostuhind", eur(num(it.buyPrice))],
@@ -294,13 +295,16 @@ function cardHTML(it) {
     if (it.buyDate && it.sellDate) rows.push(["Müügiaeg", daysBetween(it.buyDate, it.sellDate) + " päeva"]);
   } else {
     rows.push(["Kulu kokku", eur(cost(it)), "big"]);
+    rows.push(["Müügis hinnaga", hasList ? eur(num(it.listPrice)) : "pole määratud"]);
+    if (hasList) rows.push(["Võimalik kasum", eur(num(it.listPrice) - cost(it), true)]);
     if (it.buyDate) rows.push(["Riiulil", daysBetween(it.buyDate, today()) + " päeva"]);
   }
   const acts = sold
     ? `<button class="btn light" data-act="reactivate">Tagasi riiulile</button>
        <button class="btn ghost-light" data-act="edit">Muuda</button>
        <button class="btn ghost-light" data-act="delete">Kustuta</button>`
-    : `<button class="btn light" data-act="sell">Märgi müüduks</button>
+    : `<button class="btn light" data-act="sell">Müüsin</button>
+       <button class="btn ghost-light" data-act="price">${hasList ? "Muuda hinda" : "Lisa hind"}</button>
        <button class="btn ghost-light" data-act="edit">Muuda</button>`;
   return `<article class="card" data-id="${esc(it.id)}">
     ${img}
@@ -375,6 +379,7 @@ function formView() {
       <div class="field"><label for="buyPrice">Ostuhind</label><div class="money"><input class="input" id="buyPrice" name="buyPrice" inputmode="decimal" required value="${esc(it.buyPrice ?? "")}"></div></div>
       <div class="field"><label for="buyShipping">Transport <span class="opt">(kui oli)</span></label><div class="money"><input class="input" id="buyShipping" name="buyShipping" inputmode="decimal" value="${esc(it.buyShipping ?? "")}"></div></div>
     </div>
+    <div class="field"><label for="listPrice">Müügis hinnaga <span class="opt">(valikuline, saab hiljem lisada)</span></label><div class="money"><input class="input" id="listPrice" name="listPrice" inputmode="decimal" value="${esc(String(it.listPrice ?? "").replace(".", ","))}"></div></div>
     <div class="field"><label for="buyDate">Ostukuupäev</label><input class="input" type="date" id="buyDate" name="buyDate" value="${esc(it.buyDate || today())}"></div>
     <div class="field"><label for="note">Märkus <span class="opt">(nt väike plekk varrukal)</span></label><textarea class="input" id="note" name="note">${esc(it.note || "")}</textarea></div>
     <button class="btn primary block" id="save-btn">${S.editing ? "Salvesta muudatused" : "Pane riiulile"}</button>
@@ -405,6 +410,7 @@ function mountForm() {
       brand: form.brand.value.trim(),
       buyPrice: num(form.buyPrice.value),
       buyShipping: numOrEmpty(form.buyShipping.value),
+      listPrice: numOrEmpty(form.listPrice.value),
       buyDate: form.buyDate.value || today(),
       note: form.note.value.trim(),
     };
@@ -459,7 +465,7 @@ function sellSheet(it) {
   openSheet(`<h2>Müüdud! 🎉</h2><p class="lead">${esc(title(it))}${it.size ? ", " + esc(it.size) : ""} · kulu ${eur(cost(it))}</p>
     <form class="form" id="sell-form">
       <div class="field"><div class="lbl">Kus müüsid</div>${picker("sellPlace", ranked("sellPlace", DEFAULTS.sellPlace), it.sellPlace || "", "või kirjuta ise…")}</div>
-      <div class="field"><label for="sellPrice">Müügihind</label><div class="money"><input class="input" id="sellPrice" name="sellPrice" inputmode="decimal" required></div></div>
+      <div class="field"><label for="sellPrice">Müügihind</label><div class="money"><input class="input" id="sellPrice" name="sellPrice" inputmode="decimal" required value="${esc(String(it.listPrice ?? "").replace(".", ","))}"></div></div>
       <label class="switch"><span>Hind sisaldab postitasu</span><input type="checkbox" name="incl"></label>
       <div class="field" id="postage-f" hidden><label for="sellPostage">Postitasu</label><div class="money"><input class="input" id="sellPostage" name="sellPostage" inputmode="decimal"></div></div>
       <div class="field"><label for="sellDate">Müügikuupäev</label><input class="input" type="date" id="sellDate" name="sellDate" value="${today()}"></div>
@@ -476,6 +482,7 @@ function sellSheet(it) {
     };
     f.addEventListener("input", upd);
     f.addEventListener("change", upd);
+    upd();
     f.addEventListener("submit", async (e) => {
       e.preventDefault();
       const btn = $("#sell-btn", sh);
@@ -490,6 +497,37 @@ function sellSheet(it) {
         closeSheet();
         const p = profit(S.items.find((x) => x.id === it.id));
         toast(`Arhiivis. Kasum ${eur(p, true)}`);
+        render();
+      } catch (err) { toast("Ei õnnestunud: " + err.message); btn.disabled = false; btn.textContent = "Proovi uuesti"; }
+    });
+  });
+}
+
+function priceSheet(it) {
+  openSheet(`<h2>Müügihind</h2><p class="lead">${esc(title(it))}${it.size ? ", " + esc(it.size) : ""} · kulu ${eur(cost(it))}</p>
+    <form class="form" id="price-form">
+      <div class="field"><label for="lp">Mis hinnaga see praegu müügis on?</label><div class="money"><input class="input" id="lp" name="lp" inputmode="decimal" value="${esc(String(it.listPrice ?? "").replace(".", ","))}"></div></div>
+      <div class="preview"><span>Võimalik kasum</span><span id="pp">–</span></div>
+      <button class="btn primary block" id="price-btn">Salvesta</button>
+      <p class="muted small" style="margin:0;text-align:center">Tühjaks jättes kaob hind ära.</p>
+    </form>`, (sh) => {
+    const f = $("#price-form", sh);
+    const upd = () => {
+      if (!f.lp.value.trim()) { $("#pp", sh).textContent = "–"; return; }
+      const p = num(f.lp.value) - cost(it);
+      $("#pp", sh).innerHTML = `<span class="${p >= 0 ? "pos" : "neg"}">${eur(p, true)}</span>`;
+    };
+    f.addEventListener("input", upd);
+    upd();
+    f.lp.focus();
+    f.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const btn = $("#price-btn", sh);
+      btn.disabled = true; btn.innerHTML = `<div class="spin"></div>Salvestan…`;
+      try {
+        await saveItem({ ...strip(it), listPrice: numOrEmpty(f.lp.value) });
+        closeSheet();
+        toast("Hind salvestatud");
         render();
       } catch (err) { toast("Ei õnnestunud: " + err.message); btn.disabled = false; btn.textContent = "Proovi uuesti"; }
     });
@@ -587,7 +625,7 @@ function statsView() {
       <div class="tile"><div class="k">Keskmine kasum</div><div class="v">${sold.length ? eur(tot / sold.length, true) : "–"}</div><div class="s">toote kohta</div></div>
       <div class="tile"><div class="k">Marginaal</div><div class="v">${margin === null ? "–" : margin + "%"}</div><div class="s">kasum / kulu</div></div>
       <div class="tile"><div class="k">Müügiaeg</div><div class="v">${avgDays === null ? "–" : avgDays + " p"}</div><div class="s">ostust müügini</div></div>
-      <div class="tile"><div class="k">Riiulil</div><div class="v">${active.length} tk</div><div class="s">seotud ${eur(active.reduce((s, i) => s + cost(i), 0))}</div></div>
+      <div class="tile"><div class="k">Riiulil</div><div class="v">${active.length} tk</div><div class="s">seotud ${eur(active.reduce((s, i) => s + cost(i), 0))}${active.some((i) => String(i.listPrice ?? "").trim() !== "") ? `, müügis ${eur(active.reduce((s, i) => s + num(i.listPrice), 0))}` : ""}</div></div>
       <div class="tile hero"><div class="k">Ülekandmata kasum</div><div class="v">${eur(u)}</div>
         <div class="s">Kokku kantud üle ${eur(S.transfers.reduce((s, t) => s + num(t.amount), 0))}</div>
         ${u > 0 ? `<button class="btn primary" style="margin-top:10px" data-act="transfer">Märgi ülekanne</button>` : ""}</div>
@@ -692,6 +730,7 @@ document.addEventListener("click", async (e) => {
     if (act === "cancel-edit") { const back = S.editing && S.editing.status === "sold" ? "archive" : "active"; return go(back); }
     if (!it) return;
     if (act === "sell") return sellSheet(it);
+    if (act === "price") return priceSheet(it);
     if (act === "edit") { S.editing = strip(it); S.formPhoto = null; S.tab = "form"; render(); return window.scrollTo(0, 0); }
     if (act === "reactivate") {
       try {
