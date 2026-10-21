@@ -173,7 +173,7 @@ function saveCache() {
 async function load() {
   if (!DEMO) {
     const c = lsGet(CACHE);
-    if (c) { const d = JSON.parse(c); S.items = d.items || []; S.transfers = d.transfers || []; S.loaded = true; render(); }
+    if (c) { const d = JSON.parse(c); S.items = (d.items || []).map(normalize); S.transfers = d.transfers || []; S.loaded = true; render(); }
   }
   try {
     const d = await call({ action: "list" });
@@ -188,9 +188,14 @@ async function load() {
   }
 }
 
+// Google Sheet muudab teksti nagu "38" numbriks. Tekstiväljad peavad äpis alati olema tekst.
+const TEXT_FIELDS = ["id", "status", "photoId", "brand", "category", "size", "buyPlace", "sellPlace", "note", "buyDate", "sellDate"];
+
 function normalize(it) {
+  const out = { ...it };
+  TEXT_FIELDS.forEach((f) => { out[f] = out[f] === null || out[f] === undefined ? "" : String(out[f]); });
   return {
-    ...it,
+    ...out,
     sellInclPostage: it.sellInclPostage === true || it.sellInclPostage === "TRUE" || it.sellInclPostage === "true",
   };
 }
@@ -208,7 +213,7 @@ async function saveItem(item, photo, btn) {
 
 function ranked(field, defaults) {
   const count = {};
-  S.items.forEach((it) => { const v = (it[field] || "").trim(); if (v) count[v] = (count[v] || 0) + 1; });
+  S.items.forEach((it) => { const v = String(it[field] ?? "").trim(); if (v) count[v] = (count[v] || 0) + 1; });
   const used = Object.keys(count).sort((a, b) => count[b] - count[a]);
   return [...used, ...defaults.filter((d) => !count[d])];
 }
